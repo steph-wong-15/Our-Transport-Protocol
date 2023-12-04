@@ -2,6 +2,7 @@ from socket import *
 import struct
 import threading
 import time
+import zlib
 
 class ProtocolServer:
     def __init__(self, host, port):
@@ -26,26 +27,46 @@ class ProtocolServer:
     def handle_client(self, client_socket, client_address):
         self.perform_handshake(client_socket)
 
-        while True:
-            data = self.receive_data(client_socket, 1024, timeout=5)
-            
-            if data == "FIN":
-                self.send_data(client_socket, "ACK")
-                break
-
-        # Server sends FIN
-        self.send_data(client_socket, "FIN-ACK")
-
-        # Receive ACK from client (add timeout)
-        ack_packet = self.receive_data(client_socket, timeout=5)
-        if ack_packet != "ACK":
-            raise Exception("Failed to received ACK after FIN-ACK")
+        data = self.receive_data(client_socket, 1024, timeout=5)
         
-        # Close connection
+        # Received an indication to close connection from the client
+        if data == "FIN":
+
+            # Server sends FIN
+            self.send_data(client_socket, "FIN-ACK")
+
+            # Receive ACK from client (add timeout)
+            ack_packet = self.receive_data(client_socket, timeout=5)
+            if ack_packet != "ACK":
+                raise Exception("Failed to received ACK after FIN-ACK")
+            
+            # Close connection
+            self.close_connection()
+
+        else:
+            if self.verify_checksum(data):
+                print("Checksum verified")
+                self.send_data(client_socket, "ACK")
+
+            else:
+                print("Failed to verify checksum")
+
+    def close_connection(self):
         self.server_socket.close()
+
+    def verify_checksum(self, data):
+        checksum_result = zlib.crc32(data.encode('utf-8')) & 0xFFFFFFFF 
+        return checksum_result == data # return a boolean
 
     def receive_data(self, client_socket, bufsize=1024, timeout=None):
         data = client_socket.recv(bufsize).decode('utf-8')
+
+        if (data == "ACK" or data == "NAK" or data == "SYN" or data == "FIN"):
+            return data
+        else:
+            capitalizedSentence = data.upper()
+            client_socket.send_data(client_socket, capitalizedSentence)
+            return data
 
     def send_data(self, client_socket, data):
         message = data.encode('utf-8')
