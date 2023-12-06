@@ -12,25 +12,29 @@ class ProtocolClient:
 		self.client_socket = socket(AF_INET, SOCK_STREAM)
 		self.client_socket.connect((server_name, server_port))
 
-		self.seq_number = 0
-		self.ack_number = random.randint(0,100) # starting randomly generated sequence number
+		self.seq_number = random.randint(0,100) # starting randomly generated sequence number
+		self.ack_number = self.seq_number
 		self.window_size = 10
 
 	def perform_handshake(self):
 		# Step 1: Send SYN to server
+		# self.seq_number = self.seq_number
+		# self.ack_number += len(data)
 		print("Sending SYN to server")
-		self.send_data("SYN")
+		self.send_data("SYN", 0, 0)
 		
 		# Step 2: Receive SYN and ACK together from server
 		print("Receiving SYN-ACK from server")
-		ack_packet = self.receive_data()
-		print(ack_packet)
+		ack_packet, recSequenceNumber, recAckNumber, recLength = self.receive_data()
+
 		if ack_packet != "SYN-ACK":
 			raise Exception("Handshake failed - SYN-ACK not received")
 
 		# Step 3: Send ACK to server
 		print("Sending ACK to server")
-		self.send_data("ACK")
+		self.sequence_number = recAckNumber
+		self.ack_number = recSequenceNumber + len("SYN-ACK")
+		self.send_data("ACK", recAckNumber, recLength)
 		
 	def calculate_checksum(self, data):
 		checksum_result = zlib.crc32(data) & 0xFFFFFFFF 
@@ -51,9 +55,17 @@ class ProtocolClient:
 
 		checksum_result = self.verify_checksum(data, recChecksum)
 		data = data.decode('utf-8')
-		return data
+
+		return data, recSequenceNumber, recAckNumber, recLength
 	
-	def send_data(self, data):
+	def send_data(self, data, recAckNumber, recLength):
+		
+		if recAckNumber == 0:
+			self.ack_number = self.ack_number
+			self.seq_number = self.seq_number
+		else:
+			self.ack_number = self.seq_number + recLength
+			self.seq_number = recAckNumber
 		
 		myChecksum = 0
 		
@@ -64,26 +76,33 @@ class ProtocolClient:
 		message = struct.pack(f'{data_length}s',  data.encode('utf-8'))
 		myChecksum = self.calculate_checksum(header + message)
 
-		print(myChecksum)
-		
 		header = struct.pack("!LHHB", myChecksum, self.seq_number, self.ack_number, data_length) 
 		packet = header + message
-		
+		print(packet)
 		self.client_socket.sendall(packet)
 		
 	def close(self):
 		print("Closing socket")
 		self.client_socket.close()
+
+	def start(self):
+		protocol.perform_handshake()
+
+		message = input("Type here: ")
+		protocol.send_data(message, 0, 0)
+		modifiedSentence, recSequenceNumber, recAckNumber, recLength = protocol.receive_data()
+
+		while True:
+			message = input("Type here: ")
+			protocol.send_data(message, recAckNumber, recLength)
+			modifiedSentence, recSequenceNumber, recAckNumber, recLength = protocol.receive_data()
 		
+			print('From server: ', modifiedSentence)
+
 
 if __name__ == "__main__":
 
 	protocol = ProtocolClient("localhost", 1234)
-	protocol.perform_handshake()
-	while True:
-		message = input("Type here: ")
-		protocol.send_data(message)
-		modifiedSentence = protocol.receive_data()
-		print('From server: ', modifiedSentence)
+	protocol.start()
 
 

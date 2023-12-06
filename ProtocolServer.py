@@ -16,16 +16,18 @@ class ProtocolServer:
 
 	def perform_handshake(self, client_socket):
 		# Step 1: Receive SYN from client
-		syn_packet = self.receive_data(client_socket)
+		syn_packet, recSequenceNumber, recAckNumber = self.receive_data(client_socket)
 		if syn_packet != "SYN":
 			raise Exception("Handshake failed - SYN not received")
 		
 		# Step 2: Send a SYN and ACK together from server
+		#self.sequence_number = recAckNumber
+		#self.ack_number = recSequenceNumber + len("SYN")
 		print("Send SYN-ACK to client")
 		self.send_data(client_socket, "SYN-ACK")
 		
 		# Step 3: Receive ACK from the client
-		ack_packet = self.receive_data(client_socket)
+		ack_packet, recSequenceNumber, recAckNumber  = self.receive_data(client_socket)
 		if ack_packet != "ACK":
 			raise Exception("Handshake failed - ACK not received")
 		
@@ -33,30 +35,26 @@ class ProtocolServer:
 		self.perform_handshake(client_socket)
 		print("Handshake done")
 		while True:
-					data = self.receive_data(client_socket, 1024, timeout=5)
+					data, recSequenceNumber, recAckNumber = self.receive_data(client_socket, 1024, timeout=5)
 					print(f"Received from client: {data}")
 					# Received an indication to close connection from the client
 					if data == "FIN":
 
 							# Server sends FIN
+							#self.sequence_number += 1
+							#self.ack_number += len("FIN")
 							self.send_data(client_socket, "FIN-ACK")
 
 							# Receive ACK from client (add timeout)
-							ack_packet = self.receive_data(client_socket, timeout=5)
+							ack_packet, recSequenceNumber, recAckNumber = self.receive_data(client_socket, timeout=5)
 							if ack_packet != "ACK":
 									raise Exception("Failed to received ACK after FIN-ACK")
 							
 							# Close connection
 							self.close_connection()
 
-					else:
-						self.send_data(client_socket, "ACK")
-						print(data) 
-
 
 	def calculate_checksum(self, data):
-		print(data)
-		print(type(data))
 		checksum_result = zlib.crc32(data) & 0xFFFFFFFF 
 		return checksum_result
 
@@ -83,13 +81,16 @@ class ProtocolServer:
 
 		checksum_result = self.verify_checksum(data, recChecksum)
 		data = data.decode('utf-8')
-				
+		
+		self.sequence_number += 1
+		self.ack_number += len(data)
+
 		if (data == "ACK" or data == "NAK" or data == "SYN" or data == "FIN"):
-			return data
+			return data, recSequenceNumber, recAckNumber
 		else:
 			capitalizedSentence = data.upper()
 			self.send_data(client_socket, capitalizedSentence)
-			return data
+			return data, recSequenceNumber, recAckNumber
 
 	def send_data(self, client_socket, data):
 		
@@ -117,7 +118,6 @@ class ProtocolServer:
 			client_socket, client_address = self.server_socket.accept()
 			print(f"Connection from {client_address}")
 			self.handle_client(client_socket,client_address)
-			#self.receive_data(client_socket)
 			client_thread = threading.Thread(target=self.handle_client, args=(client_socket, client_address))
 
 
