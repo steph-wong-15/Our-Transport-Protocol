@@ -11,6 +11,7 @@ class ProtocolServer:
 		self.server_socket.bind((host, port))
 		self.server_socket.listen(1) # server begins listening to incoming requests
 
+		self.buffer = 255
 		self.sequence_number = random.randint(0,100) # starting randomly generated sequence number
 		self.ack_number = 0
 
@@ -21,8 +22,8 @@ class ProtocolServer:
 			raise Exception("Handshake failed - SYN not received")
 		
 		# Step 2: Send a SYN and ACK together from server
-		#self.sequence_number = recAckNumber
-		#self.ack_number = recSequenceNumber + len("SYN")
+		self.sequence_number = recAckNumber
+		self.ack_number = recSequenceNumber + len("SYN")
 		print("Send SYN-ACK to client")
 		self.send_data(client_socket, "SYN-ACK")
 		
@@ -54,6 +55,8 @@ class ProtocolServer:
 							self.close_connection()
 
 
+
+
 	def calculate_checksum(self, data):
 		checksum_result = zlib.crc32(data) & 0xFFFFFFFF 
 		return checksum_result
@@ -67,11 +70,10 @@ class ProtocolServer:
 		self.send_data(client_socket, ack_packet, sequence_number)
 
 	def receive_data(self, client_socket, bufsize=1024, timeout=None):
+
 		recPacket = client_socket.recv(1024)
 		recHeader = recPacket[:9]
 		recChecksum, recSequenceNumber, recAckNumber, recLength = struct.unpack("!LHHB", recHeader) 
-		# data = client_socket.recv(bufsize).decode()
-		print(recLength)
 		data = struct.unpack(f'{recLength}s', recPacket[9:9 + recLength])[0] # take the first value in the tuple of format ([0],) --> which is a double
 
 		print(f"Checksum: {recChecksum}")
@@ -85,6 +87,9 @@ class ProtocolServer:
 		self.sequence_number += 1
 		self.ack_number += len(data)
 
+		if data == "!":
+			self.buffer = 255
+
 		if (data == "ACK" or data == "NAK" or data == "SYN" or data == "FIN"):
 			return data, recSequenceNumber, recAckNumber
 		else:
@@ -95,16 +100,15 @@ class ProtocolServer:
 	def send_data(self, client_socket, data):
 		
 		myChecksum = 0
-
 		data_length = len(data)
 
 		# Header is checksum (16), sequence_number (16), ack_number (16)
-		header = struct.pack("!LHHB", myChecksum, self.sequence_number, self.ack_number, data_length)
+		header = struct.pack("!LHHBB", myChecksum, self.sequence_number, self.ack_number, data_length, self.buffer)
 		
 		message = struct.pack(f'{data_length}s', data.encode('utf-8'))
 		myChecksum = self.calculate_checksum(header + message)
 
-		header = struct.pack("!LHHB", myChecksum, self.sequence_number, self.ack_number, data_length) 
+		header = struct.pack("!LHHBB", myChecksum, self.sequence_number, self.ack_number, data_length, self.buffer) 
 		packet = header + message
 		print(packet)
 		client_socket.sendall(packet)

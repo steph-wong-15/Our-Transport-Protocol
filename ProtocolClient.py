@@ -12,6 +12,7 @@ class ProtocolClient:
 		self.client_socket = socket(AF_INET, SOCK_STREAM)
 		self.client_socket.connect((server_name, server_port))
 
+		self.receiver_buffer_size = 255
 		self.seq_number = random.randint(0,100) # starting randomly generated sequence number
 		self.ack_number = self.seq_number
 		self.window_size = 10
@@ -22,13 +23,15 @@ class ProtocolClient:
 		# self.ack_number += len(data)
 		print("Sending SYN to server")
 		self.send_data("SYN", 0, 0)
-		
+
 		# Step 2: Receive SYN and ACK together from server
 		print("Receiving SYN-ACK from server")
-		ack_packet, recSequenceNumber, recAckNumber, recLength = self.receive_data()
-
+		ack_packet, recSequenceNumber, recAckNumber, recLength, recBuffer = self.receive_data()
 		if ack_packet != "SYN-ACK":
 			raise Exception("Handshake failed - SYN-ACK not received")
+		
+		self.receiver_buffer_size = recBuffer-1
+		print(recBuffer)
 
 		# Step 3: Send ACK to server
 		print("Sending ACK to server")
@@ -48,18 +51,18 @@ class ProtocolClient:
 		
 		recPacket = self.client_socket.recv(bufsize)
 		print(recPacket)
-		recHeader = recPacket[:9]
-		recChecksum, recSequenceNumber, recAckNumber, recLength = struct.unpack("!LHHB", recHeader)
+		recHeader = recPacket[:10]
+		recChecksum, recSequenceNumber, recAckNumber, recLength, recBuffer = struct.unpack("!LHHBB", recHeader)
 		print(recLength)
-		data = struct.unpack(f'{recLength}s',recPacket[9:9 + recLength])[0] # take the first value in the tuple of format ([0],) --> which is a double
+		data = struct.unpack(f'{recLength}s',recPacket[10:10 + recLength])[0] # take the first value in the tuple of format ([0],) --> which is a double
 
 		checksum_result = self.verify_checksum(data, recChecksum)
 		data = data.decode('utf-8')
 
-		return data, recSequenceNumber, recAckNumber, recLength
+		return data, recSequenceNumber, recAckNumber, recLength, recBuffer
 	
 	def send_data(self, data, recAckNumber, recLength):
-		
+
 		if recAckNumber == 0:
 			self.ack_number = self.ack_number
 			self.seq_number = self.seq_number
@@ -70,6 +73,15 @@ class ProtocolClient:
 		myChecksum = 0
 		
 		data_length = len(data)
+
+		if self.receiver_buffer_size - data_length >= 0:
+			self.receiver_buffer_size -= data_length
+		else:
+			data = data[:self.receiver_buffer_size]
+			print(data)
+			data_length = self.receiver_buffer_size
+			self.receiver_buffer_size = 0
+		
 		print("Send data: ", type(data))
 		header = struct.pack("!LHHB", myChecksum, self.seq_number, self.ack_number, data_length)
 		
@@ -78,8 +90,8 @@ class ProtocolClient:
 
 		header = struct.pack("!LHHB", myChecksum, self.seq_number, self.ack_number, data_length) 
 		packet = header + message
-		print(packet)
 		self.client_socket.sendall(packet)
+
 		
 	def close(self):
 		print("Closing socket")
@@ -90,15 +102,25 @@ class ProtocolClient:
 
 		message = input("Type here: ")
 		protocol.send_data(message, 0, 0)
-		modifiedSentence, recSequenceNumber, recAckNumber, recLength = protocol.receive_data()
+		modifiedSentence, recSequenceNumber, recAckNumber, recLength, recBuffer = protocol.receive_data()
 
 		while True:
 			message = input("Type here: ")
 			protocol.send_data(message, recAckNumber, recLength)
-			modifiedSentence, recSequenceNumber, recAckNumber, recLength = protocol.receive_data()
-		
-			print('From server: ', modifiedSentence)
+			
+			if self.receiver_buffer_size == 0:
+				self.send_data("!", recAckNumber, recLength)
 
+			modifiedSentence, recSequenceNumber, recAckNumber, recLength, recBuffer = protocol.receive_data()
+
+			timeout = time.time() + 5
+
+			while not modifiedSentence:
+				if time.time() >= timeout:
+					protocol.send_data(message, recAckNumber, recLength)
+					
+			print('From server: ', modifiedSentence)
+	
 
 if __name__ == "__main__":
 
