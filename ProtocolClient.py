@@ -26,34 +26,47 @@ class ProtocolClient:
 		ack_packet = self.receive_data()
 		print(ack_packet)
 		if ack_packet != "SYN-ACK":
-		    raise Exception("Handshake failed - SYN-ACK not received")
+			raise Exception("Handshake failed - SYN-ACK not received")
 
-		# Step 3: Send SYN to server
-		print("Sending SYN to server")
-		self.send_data("SYN")
+		# Step 3: Send ACK to server
+		print("Sending ACK to server")
+		self.send_data("ACK")
 		
-	def verify_checksum(self, data):
-		checksum_result = zlib.crc32(data) & 0xFFFFFFFF
-		return checksum_result == data # return a boolean
+	def calculate_checksum(self, data):
+		checksum_result = zlib.crc32(data) & 0xFFFFFFFF 
+		return checksum_result
+
+	def verify_checksum(self, data, received_checksum):
+		checksum_result = self.calculate_checksum(data)
+		return checksum_result == received_checksum # return a boolean
 
 	def receive_data(self, bufsize=1024, timeout=None):
 		
 		recPacket = self.client_socket.recv(bufsize)
-		recChecksum, recSequenceNumber, recAckNumber = struct.unpack(recPacket)                
-		unsignedCharSize = struct.calcsize("c") # calculate size in bytes of an unsigned char
-		data = struct.unpack("c", recPacket[48:48 + unsignedCharSize])[0] # take the first value in the tuple of format ([0],) --> which is a double
+		print(recPacket)
+		recHeader = recPacket[:9]
+		recChecksum, recSequenceNumber, recAckNumber, recLength = struct.unpack("!LHHB", recHeader)
+		print(recLength)
+		data = struct.unpack(f'{recLength}s',recPacket[9:9 + recLength])[0] # take the first value in the tuple of format ([0],) --> which is a double
 
-
+		checksum_result = self.verify_checksum(data, recChecksum)
+		data = data.decode('utf-8')
+		return data
+	
 	def send_data(self, data):
 		
 		myChecksum = 0
+		
+		data_length = len(data)
+		print("Send data: ", type(data))
+		header = struct.pack("!LHHB", myChecksum, self.seq_number, self.ack_number, data_length)
+		
+		message = struct.pack(f'{data_length}s',  data.encode('utf-8'))
+		myChecksum = self.calculate_checksum(header + message)
 
-		header = struct.pack("!HHH", myChecksum, self.seq_number, self.ack_number) 
-		message = struct.pack("c", data.encode('utf-8'))
+		print(myChecksum)
 		
-		myChecksum = self.verify_checksum(header + message)
-		
-		header = struct.pack("!HHH", myChecksum, self.seq_number, self.ack_number) 
+		header = struct.pack("!LHHB", myChecksum, self.seq_number, self.ack_number, data_length) 
 		packet = header + message
 		
 		self.client_socket.sendall(packet)
@@ -65,11 +78,12 @@ class ProtocolClient:
 
 if __name__ == "__main__":
 
-    protocol = ProtocolClient("localhost", 1234)
-    message = "a"
-    #protocol.perform_handshake()
-    protocol.send_data(message)
-    #modifiedSentence = protocol.receive_data()
-    #print('From Server: ', modifiedSentence)
+	protocol = ProtocolClient("localhost", 1234)
+	protocol.perform_handshake()
+	while True:
+		message = input("Type here: ")
+		protocol.send_data(message)
+		modifiedSentence = protocol.receive_data()
+		print('From server: ', modifiedSentence)
 
 

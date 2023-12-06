@@ -21,7 +21,8 @@ class ProtocolServer:
 			raise Exception("Handshake failed - SYN not received")
 		
 		# Step 2: Send a SYN and ACK together from server
-		self.send_data(client_socket, "SYN-ACK", sequence_number=self.sequence_number)
+		print("Send SYN-ACK to client")
+		self.send_data(client_socket, "SYN-ACK")
 		
 		# Step 3: Receive ACK from the client
 		ack_packet = self.receive_data(client_socket)
@@ -30,35 +31,38 @@ class ProtocolServer:
 		
 	def handle_client(self, client_socket, client_address):
 		self.perform_handshake(client_socket)
+		print("Handshake done")
+		while True:
+					data = self.receive_data(client_socket, 1024, timeout=5)
+					print(f"Received from client: {data}")
+					# Received an indication to close connection from the client
+					if data == "FIN":
 
-		data = self.receive_data(client_socket, 1024, timeout=5)
-		print(f"Received from client: {data}")
-		# Received an indication to close connection from the client
-		if data == "FIN":
+							# Server sends FIN
+							self.send_data(client_socket, "FIN-ACK")
 
-			# Server sends FIN
-			self.send_data(client_socket, "FIN-ACK")
+							# Receive ACK from client (add timeout)
+							ack_packet = self.receive_data(client_socket, timeout=5)
+							if ack_packet != "ACK":
+									raise Exception("Failed to received ACK after FIN-ACK")
+							
+							# Close connection
+							self.close_connection()
 
-			# Receive ACK from client (add timeout)
-			ack_packet = self.receive_data(client_socket, timeout=5)
-			if ack_packet != "ACK":
-				raise Exception("Failed to received ACK after FIN-ACK")
-			
-			# Close connection
-			self.close_connection()
-
-		else:
-			if self.verify_checksum(data):
-				print("Checksum verified")
-				self.send_data(client_socket, "ACK")
-
-			else:
-				print("Failed to verify checksum")
+					else:
+						self.send_data(client_socket, "ACK")
+						print(data) 
 
 
-	def verify_checksum(self, data):
-		checksum_result = zlib.crc32(data.encode('utf-8')) & 0xFFFFFFFF 
-		return checksum_result == data # return a boolean
+	def calculate_checksum(self, data):
+		print(data)
+		print(type(data))
+		checksum_result = zlib.crc32(data) & 0xFFFFFFFF 
+		return checksum_result
+
+	def verify_checksum(self, data, received_checksum):
+		checksum_result = self.calculate_checksum(data)
+		return checksum_result == received_checksum # return a boolean
 
 	def send_ack(self, client_socket, sequence_number):
 		ack_packet = f"ACK {sequence_number}"
@@ -66,31 +70,42 @@ class ProtocolServer:
 
 	def receive_data(self, client_socket, bufsize=1024, timeout=None):
 		recPacket = client_socket.recv(1024)
-		print(recPacket)
-		recChecksum, recSequenceNumber, recAckNumber = struct.unpack(recPacket) 
+		recHeader = recPacket[:9]
+		recChecksum, recSequenceNumber, recAckNumber, recLength = struct.unpack("!LHHB", recHeader) 
 		# data = client_socket.recv(bufsize).decode()
-		unsignedCharSize = struct.calcsize("c") # calculate size in bytes of an unsigned char
-		data = struct.unpack("c", recPacket[48:48 + unsignedCharSize])[0] # take the first value in the tuple of format ([0],) --> which is a double
+		print(recLength)
+		data = struct.unpack(f'{recLength}s', recPacket[9:9 + recLength])[0] # take the first value in the tuple of format ([0],) --> which is a double
 
+		print(f"Checksum: {recChecksum}")
+		print(f"Sequence Number: {recSequenceNumber}")
+		print(f"Acknowledgment Number: {recAckNumber}")
+		print(f"String: {data}")
+
+		checksum_result = self.verify_checksum(data, recChecksum)
+		data = data.decode('utf-8')
+				
 		if (data == "ACK" or data == "NAK" or data == "SYN" or data == "FIN"):
 			return data
 		else:
 			capitalizedSentence = data.upper()
-			client_socket.send_data(client_socket, capitalizedSentence)
+			self.send_data(client_socket, capitalizedSentence)
 			return data
 
 	def send_data(self, client_socket, data):
 		
 		myChecksum = 0
 
+		data_length = len(data)
+
 		# Header is checksum (16), sequence_number (16), ack_number (16)
-		header = struct.pack(myChecksum, self.sequence_number, self.ack_number) 
-		message = struct.pack("c", data.encode('utf-8'))
-		myChecksum = self.verify_checksum(header + message) 
+		header = struct.pack("!LHHB", myChecksum, self.sequence_number, self.ack_number, data_length)
+		
+		message = struct.pack(f'{data_length}s', data.encode('utf-8'))
+		myChecksum = self.calculate_checksum(header + message)
 
-		header = struct.pack(myChecksum, self.sequence_number, self.ack_number) 
+		header = struct.pack("!LHHB", myChecksum, self.sequence_number, self.ack_number, data_length) 
 		packet = header + message
-
+		print(packet)
 		client_socket.sendall(packet)
 
 	def close_connection(self):
@@ -101,7 +116,8 @@ class ProtocolServer:
 		while True:
 			client_socket, client_address = self.server_socket.accept()
 			print(f"Connection from {client_address}")
-			self.receive_data(client_socket)
+			self.handle_client(client_socket,client_address)
+			#self.receive_data(client_socket)
 			client_thread = threading.Thread(target=self.handle_client, args=(client_socket, client_address))
 
 
